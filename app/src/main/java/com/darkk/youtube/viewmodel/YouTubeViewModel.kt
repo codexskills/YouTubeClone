@@ -125,6 +125,95 @@ class YouTubeViewModel(application: Application) : AndroidViewModel(application)
     private val _shortsList = MutableStateFlow<List<VideoItem>>(emptyList())
     val shortsList: StateFlow<List<VideoItem>> = _shortsList
 
+    // Login state
+    private val _isLoggedIn = MutableStateFlow(false)
+    val isLoggedIn: StateFlow<Boolean> = _isLoggedIn
+
+    private val _showLogin = MutableStateFlow(false)
+    val showLogin: StateFlow<Boolean> = _showLogin
+
+    fun checkLoginState() {
+        _isLoggedIn.value = repository.isLoggedIn()
+    }
+
+    fun setShowLogin(show: Boolean) {
+        _showLogin.value = show
+    }
+
+    // Category feeds: separate state per category tab
+    private val _categoryFeeds = mutableMapOf<String, MutableStateFlow<HomeUiState>>()
+    private val _currentCategory = MutableStateFlow("All")
+    val currentCategory: StateFlow<String> = _currentCategory
+
+    fun getCategoryFeed(category: String): StateFlow<HomeUiState> {
+        return _categoryFeeds.getOrPut(category) {
+            MutableStateFlow(HomeUiState.Loading)
+        }
+    }
+
+    fun loadCategoryFeed(category: String) {
+        _currentCategory.value = category
+        if (category == "All") {
+            loadHomeFeed()
+            return
+        }
+        val feed = _categoryFeeds.getOrPut(category) { MutableStateFlow(HomeUiState.Loading) }
+        feed.value = HomeUiState.Loading
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            YouTubeApi.search(query = category, visitorData = currentVisitorData)
+                .onSuccess { page ->
+                    page.visitorData?.let { currentVisitorData = it }
+                    feed.value = HomeUiState.Success(
+                        videos = page.videos,
+                        continuationToken = page.continuationToken
+                    )
+                }
+                .onFailure { e ->
+                    feed.value = HomeUiState.Error(e.message ?: "Failed to load $category")
+                }
+        }
+    }
+
+    fun loadMoreCategoryFeed(category: String) {
+        val feed = _categoryFeeds[category] ?: return
+        val current = feed.value
+        if (current !is HomeUiState.Success || current.continuationToken == null || current.isFetchingMore) return
+        feed.value = current.copy(isFetchingMore = true)
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            YouTubeApi.search(query = category, continuation = current.continuationToken, visitorData = currentVisitorData)
+                .onSuccess { page ->
+                    page.visitorData?.let { currentVisitorData = it }
+                    val distinct = (current.videos + page.videos).distinctBy { it.videoId }
+                    feed.value = HomeUiState.Success(
+                        videos = distinct,
+                        continuationToken = page.continuationToken,
+                        isFetchingMore = false
+                    )
+                }
+                .onFailure {
+                    feed.value = current.copy(isFetchingMore = false)
+                }
+        }
+    }
+
+    // Preload cache for faster video start
+    private val _playerDataCache = mutableMapOf<String, PlayerData>()
+    private val _preloadingJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    fun preloadPlayerData(videoId: String) {
+        if (_playerDataCache.containsKey(videoId) || _preloadingJobs.containsKey(videoId)) return
+        _preloadingJobs[videoId] = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            YouTubeApi.getPlayerData(videoId)
+                .onSuccess { data ->
+                    _playerDataCache[videoId] = data
+                }
+            _preloadingJobs.remove(videoId)
+        }
+    }
+
+    fun getCachedPlayerData(videoId: String): PlayerData? = _playerDataCache[videoId]
+
+
     init {
         try {
             val subsJson = prefs.getString("subscriptions", "[]") ?: "[]"
@@ -361,6 +450,7 @@ class YouTubeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun saveHistory(video: PlayerData) {
+        if (!repository.canSaveHistory()) return
         val currentHistory = _watchHistory.value.toMutableList()
         currentHistory.remove(video.videoId)
         currentHistory.add(0, video.videoId)
@@ -368,7 +458,7 @@ class YouTubeViewModel(application: Application) : AndroidViewModel(application)
             currentHistory.removeAt(currentHistory.lastIndex)
         }
         _watchHistory.value = currentHistory
-        prefs.edit().putString("watch_history", currentHistory.joinToString(",")).commit() // Force sync so Library sees it
+        prefs.edit().putString("watch_history", currentHistory.joinToString(",")).commit()
     }
 
     // --- Subscriptions Logic ---
@@ -433,17 +523,28 @@ class YouTubeViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun loadPlayerData(videoId: String) {
-        val currentHistory = _watchHistory.value.toMutableList()
-        currentHistory.remove(videoId)
-        currentHistory.add(0, videoId)
-        if (currentHistory.size > 100) currentHistory.removeLast()
-        _watchHistory.value = currentHistory
-        prefs.edit().putString("watch_history", currentHistory.joinToString(",")).commit()
+        if (repository.canSaveHistory()) {
+            val currentHistory = _watchHistory.value.toMutableList()
+            currentHistory.remove(videoId)
+            currentHistory.add(0, videoId)
+            if (currentHistory.size > 100) currentHistory.removeLast()
+            _watchHistory.value = currentHistory
+            prefs.edit().putString("watch_history", currentHistory.joinToString(",")).commit()
+        }
+
+        // Check cache first for instant playback
+        val cached = _playerDataCache[videoId]
+        if (cached != null) {
+            _playerState.value = PlayerUiState.Ready(cached)
+            _playerDataCache.remove(videoId)
+        }
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            _playerState.value = PlayerUiState.Loading
+            if (cached == null) {
+                _playerState.value = PlayerUiState.Loading
+            }
             
-            // Fire and forget playback tracking to build user's watch history
+            // Fire and forget playback tracking
             launch {
                 YouTubeApi.pingPlayback(videoId, currentVisitorData)
             }
@@ -451,9 +552,16 @@ class YouTubeViewModel(application: Application) : AndroidViewModel(application)
             YouTubeApi.getPlayerData(videoId)
                 .onSuccess { data ->
                     _playerState.value = PlayerUiState.Ready(data)
+                    // Preload next likely video (first related)
+                    launch {
+                        val related = YouTubeApi.getRelatedVideos(videoId).getOrNull().orEmpty()
+                        related.firstOrNull()?.let { preloadPlayerData(it.videoId) }
+                    }
                 }
                 .onFailure { e ->
-                    _playerState.value = PlayerUiState.Error(e.message ?: "Failed to load video")
+                    if (cached == null) {
+                        _playerState.value = PlayerUiState.Error(e.message ?: "Failed to load video")
+                    }
                 }
         }
     }

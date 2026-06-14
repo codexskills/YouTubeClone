@@ -357,12 +357,22 @@ private fun VideoPlayerPane(
     var showSpeedMenu by remember { mutableStateOf(false) }
     var currentSpeed by remember { androidx.compose.runtime.mutableFloatStateOf(1f) }
     var showDownloadDialog by remember { mutableStateOf(false) }
+    var showCaptionMenu by remember { mutableStateOf(false) }
+    var showStatsForNerds by remember { mutableStateOf(false) }
+    var isLooping by remember { mutableStateOf(false) }
+    var captionsEnabled by remember { mutableStateOf(false) }
+    var selectedCaptionLang by remember { mutableStateOf("English") }
+    var seekIndicator by remember { mutableStateOf<Pair<Long, Int>?>(null) } // offsetMs, direction
 
     LaunchedEffect(currentSpeed) {
         val params = androidx.media3.common.PlaybackParameters(currentSpeed)
         if (exoPlayer.playbackParameters.speed != currentSpeed) {
             exoPlayer.playbackParameters = params
         }
+    }
+
+    LaunchedEffect(isLooping) {
+        exoPlayer.repeatMode = if (isLooping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
     }
     var floatingOffsetX by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     var floatingOffsetY by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
@@ -942,6 +952,25 @@ private fun VideoPlayerPane(
                             } else if (currentFraction > 0.5f) {
                                 onExpand()
                             }
+                        },
+                        onDoubleTap = { offset ->
+                            if (currentFraction < 0.1f) {
+                                val tapX = offset.x
+                                val width = size.width.toFloat()
+                                if (tapX < width / 3f) {
+                                    // Left side - rewind 10s
+                                    val newPos = (currentPosition - 10000L).coerceAtLeast(0L)
+                                    exoPlayer.seekTo(newPos)
+                                    currentPosition = newPos
+                                    seekIndicator = Pair(-10000L, 0)
+                                } else if (tapX > width * 2f / 3f) {
+                                    // Right side - forward 10s
+                                    val newPos = (currentPosition + 10000L).coerceAtMost(duration)
+                                    exoPlayer.seekTo(newPos)
+                                    currentPosition = newPos
+                                    seekIndicator = Pair(10000L, 0)
+                                }
+                            }
                         }
                     )
                 }
@@ -1093,6 +1122,38 @@ private fun VideoPlayerPane(
                         )
                     }
 
+                    // Seek indicator overlay
+                    val seekInfo = seekIndicator
+                    if (seekInfo != null) {
+                        LaunchedEffect(seekIndicator) {
+                            kotlinx.coroutines.delay(600)
+                            seekIndicator = null
+                        }
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(100.dp)
+                                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(16.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = if (seekInfo.first < 0) Icons.Default.FastRewind else Icons.Default.FastForward,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = if (seekInfo.first < 0) "-10s" else "+10s",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
                     val totalSecs = currentPosition / 1000
                     val curH = totalSecs / 3600
                     val curM = (totalSecs % 3600) / 60
@@ -1119,6 +1180,31 @@ private fun VideoPlayerPane(
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.weight(1f))
+                        // Subtitles/Captions button
+                        IconButton(
+                            onClick = { showCaptionMenu = true },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ClosedCaption,
+                                contentDescription = "Captions",
+                                tint = if (captionsEnabled) Color(0xFFFF0000) else Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        // Loop toggle button
+                        IconButton(
+                            onClick = { isLooping = !isLooping },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Repeat,
+                                contentDescription = "Loop",
+                                tint = if (isLooping) Color(0xFFFF0000) else Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        // Fullscreen button
                         IconButton(onClick = { 
                             if (activity != null) {
                                 if (isLandscape) {
@@ -1132,7 +1218,7 @@ private fun VideoPlayerPane(
                                 imageVector = if (isLandscape) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, 
                                 contentDescription = "Fullscreen", 
                                 tint = Color.White,
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                         }
                     }
@@ -1453,6 +1539,7 @@ private fun VideoPlayerPane(
         ) {
             Column(modifier = Modifier.padding(bottom = 16.dp)) {
                 Text("Settings", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(16.dp))
+                // Quality
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1465,6 +1552,7 @@ private fun VideoPlayerPane(
                     Text("Quality", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
                     Text(selectedQuality?.label ?: "Auto", color = Color.Gray, fontSize = 14.sp)
                 }
+                // Speed
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1476,6 +1564,165 @@ private fun VideoPlayerPane(
                     Spacer(Modifier.width(16.dp))
                     Text("Playback speed", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
                     Text(if (currentSpeed == 1f) "Normal" else "${currentSpeed}x", color = Color.Gray, fontSize = 14.sp)
+                }
+                // Captions
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSettingsMenu = false; showCaptionMenu = true }
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Subtitles, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text("Captions", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Text(if (captionsEnabled) selectedCaptionLang else "Off", color = Color.Gray, fontSize = 14.sp)
+                }
+                // Loop
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { isLooping = !isLooping; showSettingsMenu = false }
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Repeat, null, tint = if (isLooping) Color(0xFFFF0000) else Color.White, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text("Loop video", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Text(if (isLooping) "On" else "Off", color = Color.Gray, fontSize = 14.sp)
+                }
+                // Stats for nerds
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSettingsMenu = false; showStatsForNerds = true }
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Info, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text("Stats for nerds", color = Color.White, fontSize = 16.sp)
+                }
+            }
+        }
+    }
+
+    if (showCaptionMenu) {
+        @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showCaptionMenu = false },
+            containerColor = Color(0xFF1F1F1F)
+        ) {
+            val captionsList = listOf("Off", "English", "Hindi", "Spanish", "French", "German", "Japanese", "Arabic", "Portuguese")
+            LazyColumn(modifier = Modifier.padding(bottom = 16.dp)) {
+                item {
+                    Text("Captions / Subtitles", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(16.dp))
+                }
+                items(captionsList) { lang ->
+                    val isSelected = if (lang == "Off") !captionsEnabled else (captionsEnabled && selectedCaptionLang == lang)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (lang == "Off") {
+                                    captionsEnabled = false
+                                } else {
+                                    captionsEnabled = true
+                                    selectedCaptionLang = lang
+                                }
+                                showCaptionMenu = false
+                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if ((lang == "Off" && !captionsEnabled) || (lang != "Off" && captionsEnabled && selectedCaptionLang == lang)) {
+                            Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(16.dp))
+                        } else {
+                            Spacer(Modifier.width(36.dp))
+                        }
+                        Text(lang, color = Color.White, fontSize = 15.sp)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showStatsForNerds) {
+        @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showStatsForNerds = false },
+            containerColor = Color(0xFF1F1F1F)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp).padding(bottom = 32.dp)) {
+                Text("Stats for nerds", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(20.dp))
+                val metricStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFAAAAAA), fontSize = 13.sp)
+                val valueStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 13.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Resolution", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val v = exoPlayer.videoFormat
+                        val res = if (v != null) "${v.width}x${v.height}" else "?"
+                        Text(res, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Codec", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val v = exoPlayer.videoFormat
+                        val codec = if (v != null) v.codecs ?: "?" else "?"
+                        Text(codec, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Frame rate", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val v = exoPlayer.videoFormat
+                        val fps = if (v != null && v.frameRate > 0) "${v.frameRate} fps" else "?"
+                        Text(fps, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Buffer", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val buffered = exoPlayer.bufferedPosition
+                        val bufSec = (buffered - currentPosition) / 1000
+                        Text("${bufSec}s buffered", style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Bitrate", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val v = exoPlayer.videoFormat
+                        val br = if (v != null && v.bitrate > 0) "${v.bitrate / 1000} kbps" else "?"
+                        Text(br, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Audio codec", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val a = exoPlayer.audioFormat
+                        val ac = if (a != null) a.codecs ?: "?" else "?"
+                        Text(ac, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Audio channels", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val a = exoPlayer.audioFormat
+                        val ch = if (a != null && a.channelCount > 0) "${a.channelCount}" else "?"
+                        Text(ch, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Audio sample rate", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val a = exoPlayer.audioFormat
+                        val sr = if (a != null && a.sampleRate > 0) "${a.sampleRate} Hz" else "?"
+                        Text(sr, style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Volume", style = metricStyle, modifier = Modifier.width(140.dp))
+                        Text("${(exoPlayer.volume * 100).toInt()}%", style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Duration", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val d = duration / 1000
+                        val dh = d / 3600; val dm = (d % 3600) / 60; val ds = d % 60
+                        Text(if (dh > 0) "${dh}:${String.format("%02d", dm)}:${String.format("%02d", ds)}" else "${dm}:${String.format("%02d", ds)}", style = valueStyle)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Real time", style = metricStyle, modifier = Modifier.width(140.dp))
+                        val now = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                        Text(now, style = valueStyle)
+                    }
                 }
             }
         }

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +75,13 @@ fun YouTubeTopBar(
                         color = Color.White
                     ),
                     modifier = Modifier.scale(scaleX = 0.85f, scaleY = 1.15f).offset(x = (-4).dp)
+                )
+                Text(
+                    text = "Premium",
+                    color = Color(0xFFAAAAAA),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.offset(x = (-2).dp, y = 4.dp)
                 )
             }
             // Right Icons

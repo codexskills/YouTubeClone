@@ -15,7 +15,9 @@ import java.io.File
 @Serializable
 data class UserProfile(
     var name: String = "",
-    var handle: String = ""
+    var handle: String = "",
+    var email: String = "",
+    var isLoggedIn: Boolean = false
 )
 
 @Serializable
@@ -153,4 +155,34 @@ class LocalRepository(private val context: Context) {
     private fun savePlaylists() {
         playlistsFile.writeText(json.encodeToString(_playlists.value))
     }
+
+    fun isLoggedIn(): Boolean = _userProfile.value?.isLoggedIn == true
+
+    suspend fun login(name: String, email: String = "user@gmail.com") {
+        val profile = UserProfile(
+            name = name,
+            handle = "@${name.lowercase().replace(" ", "")}",
+            email = email,
+            isLoggedIn = true
+        )
+        _userProfile.value = profile
+        profileFile.writeText(json.encodeToString(profile))
+    }
+
+    suspend fun logout() = withContext(Dispatchers.IO) {
+        val profile = UserProfile()
+        _userProfile.value = profile
+        profileFile.writeText(json.encodeToString(profile))
+        // Clear local data when logging out
+        _history.value = emptyList()
+        historyFile.writeText("[]")
+        _playlists.value = emptyList()
+        savePlaylists()
+    }
+
+    fun canSaveHistory(): Boolean = isLoggedIn()
+
+    fun canSaveLikes(): Boolean = isLoggedIn()
+
+    fun canSavePlaylists(): Boolean = isLoggedIn()
 }

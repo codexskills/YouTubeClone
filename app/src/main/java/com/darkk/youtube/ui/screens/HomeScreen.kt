@@ -64,6 +64,8 @@ fun HomeScreen(
 
     val categories = listOf("All", "Gaming", "Music", "Live", "News", "Podcasts", "Mixes")
     var selectedCategory by remember { mutableStateOf("All") }
+    val categoryFeedState by viewModel.getCategoryFeed(selectedCategory).collectAsState()
+    val currentCategory by viewModel.currentCategory.collectAsState()
     var selectedVideoForOptions by remember { mutableStateOf<VideoItem?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
@@ -126,7 +128,10 @@ fun HomeScreen(
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (isSelected) Color.White else Color(0xFF272727),
-                                modifier = Modifier.clickable { selectedCategory = category }
+                                modifier = Modifier.clickable {
+                                    selectedCategory = category
+                                    viewModel.loadCategoryFeed(category)
+                                }
                             ) {
                                 Text(
                                     text = category,
@@ -171,15 +176,26 @@ fun HomeScreen(
                 )
             }
         } else {
-            // Home feed
-            HomeFeedPane(
-                state = homeState,
-                onVideoClick = onVideoClick,
-                onRetry = { viewModel.loadHomeFeed() },
-                onLoadMore = { viewModel.loadMoreHomeFeed() },
-                onChannelClick = onChannelClick,
-                onMoreClick = { selectedVideoForOptions = it }
-            )
+            // Home feed (category-aware)
+            if (selectedCategory == "All") {
+                HomeFeedPane(
+                    state = homeState,
+                    onVideoClick = onVideoClick,
+                    onRetry = { viewModel.loadHomeFeed() },
+                    onLoadMore = { viewModel.loadMoreHomeFeed() },
+                    onChannelClick = onChannelClick,
+                    onMoreClick = { selectedVideoForOptions = it }
+                )
+            } else {
+                HomeFeedPane(
+                    state = categoryFeedState,
+                    onVideoClick = onVideoClick,
+                    onRetry = { viewModel.loadCategoryFeed(selectedCategory) },
+                    onLoadMore = { viewModel.loadMoreCategoryFeed(selectedCategory) },
+                    onChannelClick = onChannelClick,
+                    onMoreClick = { selectedVideoForOptions = it }
+                )
+            }
         }
         } // end Column
         

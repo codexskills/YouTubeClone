@@ -107,6 +107,16 @@ fun ShortsScreen(
         }
     }
 
+    // Preload next short for smooth swipe
+    LaunchedEffect(currentShortId) {
+        if (shorts.isNotEmpty()) {
+            val nextIndex = pagerState.currentPage + 1
+            if (nextIndex < shorts.size) {
+                viewModel.preloadPlayerData(shorts[nextIndex].videoId)
+            }
+        }
+    }
+
     // Connect player state stream URL to player
     val playerUiState by viewModel.playerState.collectAsState()
     LaunchedEffect(playerUiState, currentShortId) {

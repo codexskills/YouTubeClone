@@ -13,28 +13,29 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import com.darkk.youtube.ui.components.drawBackdropCustomShape
 import com.darkk.youtube.ui.components.layerBackdrop
 import com.darkk.youtube.ui.components.rememberBackdrop
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.material3.*
+import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.*
 import com.darkk.youtube.innertube.VideoItem
 import com.darkk.youtube.ui.theme.YoutubeTheme
 import com.darkk.youtube.viewmodel.YouTubeViewModel
 import com.darkk.youtube.data.LocalRepository
 import com.darkk.youtube.ui.screens.*
 import kotlinx.coroutines.launch
-
 import android.os.Build
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -44,13 +45,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         setContent {
-            YoutubeTheme {
-                YouTubeApp()
-            }
+            YoutubeTheme { YouTubeApp() }
         }
     }
 }
@@ -58,27 +57,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun YouTubeApp() {
     val context = LocalContext.current
-    val repository = remember { com.darkk.youtube.data.LocalRepository(context) }
+    val repository = remember { LocalRepository(context) }
     val viewModel: YouTubeViewModel = viewModel()
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        val permissionLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { isGranted ->
-            if (!isGranted) {
-                // Permission denied, handle if needed
-            }
-        }
-        
+        val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
         LaunchedEffect(Unit) {
-            val isGranted = ContextCompat.checkSelfPermission(
-                context, 
-                android.Manifest.permission.POST_NOTIFICATIONS
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            
-            if (!isGranted) {
+            if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                 permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
         }
     }
 
@@ -86,364 +72,263 @@ fun YouTubeApp() {
     var currentTab by remember { mutableStateOf(0) }
     var activeVideo by remember { mutableStateOf<VideoItem?>(null) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
-
+    var showCreateSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    
+
     LaunchedEffect(Unit) {
         repository.loadData()
+        viewModel.checkLoginState()
     }
-    
-    var showNameDialog by remember { mutableStateOf(false) }
-    val profile by repository.userProfile.collectAsState()
 
-    // System back button when player is open +' close it entirely
+    val profile by repository.userProfile.collectAsState()
+    val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+    val showLogin by viewModel.showLogin.collectAsState()
+
+    val prefs = context.getSharedPreferences("youtube_prefs", Context.MODE_PRIVATE)
+    var showWelcome by remember { mutableStateOf(prefs.getBoolean("first_launch", true)) }
+
     BackHandler(enabled = activeVideo != null || currentScreen !is Screen.Home || isPlayerExpanded) {
-        if (isPlayerExpanded) {
-            isPlayerExpanded = false
-        } else if (currentScreen is Screen.PlaylistDetails) {
-            currentScreen = Screen.Library
-        } else if (currentScreen !is Screen.Home) {
-            currentScreen = Screen.Home
-            currentTab = 0
-        } else if (activeVideo != null) {
-            activeVideo = null
+        when {
+            isPlayerExpanded -> isPlayerExpanded = false
+            currentScreen is Screen.PlaylistDetails -> currentScreen = Screen.Library
+            currentScreen is Screen.Notifications || currentScreen is Screen.Profile -> { currentScreen = Screen.Home; currentTab = 0 }
+            currentScreen is Screen.Settings || currentScreen is Screen.About -> currentScreen = Screen.Home
+            currentScreen is Screen.Login -> currentScreen = Screen.Home
+            currentScreen is Screen.SubSettings -> currentScreen = Screen.Settings
+            currentScreen is Screen.Library || currentScreen is Screen.History || currentScreen is Screen.Downloads -> currentScreen = Screen.Home
+            currentScreen !is Screen.Home -> { currentScreen = Screen.Home; currentTab = 0 }
+            activeVideo != null -> { activeVideo = null }
         }
     }
 
     val backdrop = rememberBackdrop()
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        bottomBar = {
-            AnimatedVisibility(
-                visible = (currentScreen == Screen.Home || currentScreen is Screen.Channel || currentScreen is Screen.Library || currentScreen is Screen.PlaylistDetails || currentScreen is Screen.Subscriptions || currentScreen is Screen.AllSubscriptions || currentScreen == Screen.Shorts) && !isPlayerExpanded,
-                enter = slideInVertically(initialOffsetY = { it }),
-                exit = slideOutVertically(targetOffsetY = { it })
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentSize(Alignment.BottomCenter)
-                        .padding(bottom = 24.dp)
-                ) {
-                    val layer = rememberGraphicsLayer()
-                    
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .wrapContentSize(Alignment.Center),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // First 4 items in a pill shape
-                        Box(
-                            modifier = Modifier
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .drawBackdropCustomShape(
-                                    backdrop = backdrop,
-                                    layer = layer,
-                                    luminanceAnimation = 0.3f,
-                                    shape = androidx.compose.foundation.shape.CircleShape
-                                )
-                                .border(0.5.dp, Color.White.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .wrapContentSize()
-                                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val NavItem = @Composable { index: Int, icon: androidx.compose.ui.graphics.vector.ImageVector ->
-                                    val selected = currentTab == index
-                                    Button(
-                                        onClick = { 
-                                            currentTab = index 
-                                            if (index == 0) currentScreen = Screen.Home
-                                            if (index == 1) currentScreen = Screen.Shorts
-                                            if (index == 3) currentScreen = Screen.Subscriptions
-                                        },
-                                        shape = androidx.compose.foundation.shape.CircleShape,
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (selected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                                            contentColor = if (selected) Color(0xFFFA233B) else Color.White
-                                        ),
-                                        contentPadding = PaddingValues(0.dp),
-                                        modifier = Modifier.size(48.dp)
-                                    ) {
-                                        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
-                                    }
-                                }
-                                NavItem(0, if (currentTab == 0) Icons.Filled.Home else Icons.Outlined.Home)
-                                NavItem(1, Icons.Outlined.PlayArrow)
-                                NavItem(2, Icons.Outlined.AddCircle)
-                                NavItem(3, Icons.Outlined.Notifications)
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.width(16.dp))
-                        
-                        // Last item in a circle shape
-                        Box(
-                            modifier = Modifier
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .drawBackdropCustomShape(
-                                    backdrop = backdrop,
-                                    layer = layer,
-                                    luminanceAnimation = 0.3f,
-                                    shape = androidx.compose.foundation.shape.CircleShape
-                                )
-                                .border(0.5.dp, Color.White.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
-                        ) {
-                            val selected = currentTab == 4
-                            Button(
-                                onClick = { 
-                                    currentTab = 4
-                                    if (profile?.name.isNullOrEmpty()) {
-                                        showNameDialog = true
-                                    } else {
-                                        currentScreen = Screen.Library
-                                    }
-                                },
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                                    contentColor = if (selected) Color(0xFFFA233B) else Color.White
-                                ),
-                                contentPadding = PaddingValues(0.dp),
-                                modifier = Modifier
-                                    .padding(8.dp)
-                                    .size(48.dp)
-                            ) {
-                                Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(24.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .layerBackdrop(backdrop)
-            ) {
-                // Home Screen is always underlying or Channel
-                if (currentScreen is Screen.Channel) {
-                    val channelUrl = (currentScreen as Screen.Channel).channelUrl
-                    com.darkk.youtube.ui.screens.ChannelScreen(
-                        channelUrl = channelUrl,
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onBack = { currentScreen = Screen.Home },
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        }
-                    )
-                } else if (currentScreen is Screen.PlaylistDetails) {
-                    val playlist = (currentScreen as Screen.PlaylistDetails).playlist
-                    PlaylistScreen(
-                        playlist = playlist,
-                        repository = repository,
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onBack = { currentScreen = Screen.Library },
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        },
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        },
-                        onSearchClick = {
-                            currentScreen = Screen.Home
-                            currentTab = 0
-                            viewModel.setSearchActive(true)
-                        }
-                    )
-                } else if (currentScreen is Screen.Subscriptions) {
-                    com.darkk.youtube.ui.screens.SubscriptionsScreen(
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        },
-                        onAllClick = {
-                            currentScreen = Screen.AllSubscriptions
-                        },
-                        onSearchActivated = {
-                            currentTab = 0
-                            currentScreen = Screen.Home
-                        },
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        },
-                        onNotificationsClick = {
-                            currentScreen = Screen.Releases
-                        }
-                    )
-                } else if (currentScreen is Screen.AllSubscriptions) {
-                    com.darkk.youtube.ui.screens.AllSubscriptionsScreen(
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onBack = { currentScreen = Screen.Subscriptions },
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        }
-                    )
-                } else if (currentScreen is Screen.Releases) {
-                    com.darkk.youtube.ui.screens.ReleasesScreen(
-                        onBack = { currentScreen = Screen.Home },
-                        innerPadding = innerPadding,
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        }
-                    )
-                } else if (currentScreen is Screen.Downloads) {
-                    com.darkk.youtube.ui.screens.DownloadsScreen(
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onBack = {
-                            currentScreen = Screen.Library
-                        }
-                    )
-                } else if (currentScreen is Screen.Settings) {
-                    com.darkk.youtube.ui.screens.SettingsScreen(
-                        onBack = { currentScreen = Screen.Library },
-                        innerPadding = innerPadding
-                    )
-                } else if (currentScreen is Screen.History) {
-                    com.darkk.youtube.ui.screens.HistoryScreen(
-                        viewModel = viewModel,
-                        repository = repository,
-                        innerPadding = innerPadding,
-                        onBack = { currentScreen = Screen.Library },
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        },
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        }
-                    )
-                } else if (currentScreen is Screen.Library) {
-                    LibraryScreen(
-                        repository = repository,
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        },
-                        onPlaylistClick = { playlist ->
-                            currentScreen = Screen.PlaylistDetails(playlist)
-                        },
-                        onSearchClick = {
-                            currentScreen = Screen.Home
-                            currentTab = 0
-                            viewModel.setSearchActive(true)
-                        },
-                        onDownloadsClick = {
-                            currentScreen = Screen.Downloads
-                        },
-                        onHistoryClick = {
-                            currentScreen = Screen.History
-                        },
-                        onSettingsClick = {
-                            currentScreen = Screen.Settings
-                        }
-                    )
-                } else if (currentTab == 0) {
-                    HomeScreen(
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onVideoClick = { video ->
-                            activeVideo = video
-                            isPlayerExpanded = true
-                        },
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        },
-                        onNotificationsClick = {
-                            currentScreen = Screen.Releases
-                        }
-                    )
-                } else if (currentScreen is Screen.Shorts) {
-                    ShortsScreen(
-                        viewModel = viewModel,
-                        innerPadding = innerPadding,
-                        onChannelClick = { url ->
-                            currentScreen = Screen.Channel(url)
-                        }
-                    )
-                } else {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Not Implemented", color = Color.White)
-                    }
-                }
-            }
+    // Handle navigation to sub-settings
+    val navigateToSettings: (String) -> Unit = { settingId ->
+        currentScreen = Screen.SubSettings(settingId)
+    }
 
-            // Single PlayerScreen overlay — always mounted when a video is active.
-            // isMini drives which layout (full vs mini bar) is shown internally.
-            // This keeps the ExoPlayer alive across the mini/full transition.
-            if (activeVideo != null) {
-                PlayerScreen(
-                    videoId = activeVideo!!.videoId,
-                    videoTitle = activeVideo!!.title,
-                    viewModel = viewModel,
-                    repository = repository,
-                    isMini = !isPlayerExpanded,
-                    bottomNavHeight = innerPadding.calculateBottomPadding(),
-                    onBack = { isPlayerExpanded = false },
-                    onExpand = { isPlayerExpanded = true },
-                    onClose = {
-                        activeVideo = null
-                        isPlayerExpanded = false
-                    },
-                    onChannelClick = { url ->
-                        currentScreen = Screen.Channel(url)
-                        isPlayerExpanded = false
-                    },
-                    onRelatedVideoClick = { video ->
-                        activeVideo = video
-                        isPlayerExpanded = true
-                    }
-                )
-            }
-        }
-        
-        if (showNameDialog) {
-            var nameInput by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { showNameDialog = false },
-                title = { Text("Welcome!") },
-                text = {
-                    OutlinedTextField(
-                        value = nameInput,
-                        onValueChange = { nameInput = it },
-                        label = { Text("Enter your name") }
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        scope.launch {
-                            repository.saveProfile(nameInput)
-                        }
-                        showNameDialog = false
-                        currentScreen = Screen.Library
-                    }) {
-                        Text("Save")
+    // Determine bottom nav visibility
+    val showBottomNav = !isPlayerExpanded && (currentScreen == Screen.Home || currentScreen == Screen.Shorts ||
+        currentScreen == Screen.Notifications || currentScreen == Screen.Profile ||
+        currentScreen is Screen.Library || currentScreen is Screen.Channel ||
+        currentScreen is Screen.PlaylistDetails || currentScreen is Screen.Subscriptions ||
+        currentScreen is Screen.AllSubscriptions)
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Main content area
+        Box(modifier = Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+            when (currentScreen) {
+                is Screen.Channel -> {
+                    val url = (currentScreen as Screen.Channel).channelUrl
+                    ChannelScreen(url, viewModel, PaddingValues(0.dp),
+                        onBack = { currentScreen = Screen.Home },
+                        onVideoClick = { activeVideo = it; isPlayerExpanded = true })
+                }
+                is Screen.PlaylistDetails -> {
+                    val pl = (currentScreen as Screen.PlaylistDetails).playlist
+                    PlaylistScreen(pl, repository, viewModel, PaddingValues(0.dp),
+                        onBack = { currentScreen = Screen.Library },
+                        onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                        onChannelClick = { currentScreen = Screen.Channel(it) },
+                        onSearchClick = { currentScreen = Screen.Home; currentTab = 0; viewModel.setSearchActive(true) })
+                }
+                is Screen.Subscriptions -> {
+                    SubscriptionsScreen(viewModel, PaddingValues(0.dp),
+                        onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                        onAllClick = { currentScreen = Screen.AllSubscriptions },
+                        onSearchActivated = { currentTab = 0; currentScreen = Screen.Home },
+                        onChannelClick = { currentScreen = Screen.Channel(it) },
+                        onNotificationsClick = { currentScreen = Screen.Releases })
+                }
+                is Screen.AllSubscriptions -> {
+                    AllSubscriptionsScreen(viewModel, PaddingValues(0.dp),
+                        onBack = { currentScreen = Screen.Subscriptions },
+                        onChannelClick = { currentScreen = Screen.Channel(it) })
+                }
+                is Screen.Releases -> {
+                    ReleasesScreen(onBack = { currentScreen = Screen.Home }, innerPadding = PaddingValues(0.dp),
+                        onVideoClick = { activeVideo = it; isPlayerExpanded = true })
+                }
+                is Screen.Downloads -> {
+                    DownloadsScreen(viewModel, innerPadding = PaddingValues(0.dp),
+                        onBack = { currentScreen = Screen.Home })
+                }
+                is Screen.Settings -> {
+                    SettingsScreen(onBack = { currentScreen = Screen.Home }, innerPadding = PaddingValues(0.dp), onNavigate = navigateToSettings)
+                }
+                is Screen.SubSettings -> {
+                    val id = (currentScreen as Screen.SubSettings).settingId
+                    when (id) {
+                        "general" -> GeneralSettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "account" -> AccountSettingsScreen(onBack = { currentScreen = Screen.Settings },
+                            onLogout = { scope.launch { repository.logout(); viewModel.checkLoginState(); currentScreen = Screen.Home; currentTab = 0 } })
+                        "data_saver" -> DataSaverSettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "autoplay" -> AutoplaySettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "quality" -> QualitySettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "downloads" -> DownloadSettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "tv" -> TVSettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "history" -> HistorySettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "privacy" -> PrivacySettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "notifications" -> NotifSettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "accessibility" -> AccessibilitySettingsScreen(onBack = { currentScreen = Screen.Settings })
+                        "about" -> AboutScreen(onBack = { currentScreen = Screen.Settings })
+                        else -> GeneralSettingsScreen(onBack = { currentScreen = Screen.Settings })
                     }
                 }
-            )
+                is Screen.About -> AboutScreen(onBack = { currentScreen = Screen.Home })
+                is Screen.History -> HistoryScreen(viewModel, repository, PaddingValues(0.dp),
+                    onBack = { currentScreen = Screen.Home },
+                    onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                    onChannelClick = { currentScreen = Screen.Channel(it) })
+                is Screen.Library -> LibraryScreen(repository, viewModel, PaddingValues(0.dp),
+                    onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                    onPlaylistClick = { currentScreen = Screen.PlaylistDetails(it) },
+                    onSearchClick = { currentScreen = Screen.Home; currentTab = 0; viewModel.setSearchActive(true) },
+                    onDownloadsClick = { currentScreen = Screen.Downloads },
+                    onHistoryClick = { currentScreen = Screen.History },
+                    onSettingsClick = { currentScreen = Screen.Settings })
+                is Screen.Home -> HomeScreen(viewModel, PaddingValues(0.dp),
+                    onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                    onChannelClick = { currentScreen = Screen.Channel(it) },
+                    onNotificationsClick = { currentScreen = Screen.Releases })
+                is Screen.Shorts -> ShortsScreen(viewModel, PaddingValues(0.dp),
+                    onChannelClick = { currentScreen = Screen.Channel(it) })
+                is Screen.Notifications -> NotificationsScreen(
+                    onBack = { currentScreen = Screen.Home; currentTab = 0 },
+                    onSettingsClick = { currentScreen = Screen.Settings })
+                is Screen.Profile -> ProfileScreen(repository,
+                    onBack = { currentScreen = Screen.Home; currentTab = 0 },
+                    onSettingsClick = { currentScreen = Screen.Settings },
+                    onHistoryClick = { currentScreen = Screen.History },
+                    onPlaylistsClick = { currentScreen = Screen.Library },
+                    onDownloadsClick = { currentScreen = Screen.Downloads },
+                    onLikedClick = { currentScreen = Screen.Library },
+                    onAboutClick = { currentScreen = Screen.About },
+                    onLoginClick = { viewModel.setShowLogin(true) })
+                is Screen.Login -> LoginScreen(repository,
+                    onLoginSuccess = { viewModel.checkLoginState(); currentScreen = Screen.Home; currentTab = 0 },
+                    onSkip = { viewModel.setShowLogin(false); currentScreen = Screen.Home; currentTab = 0 })
+                else -> HomeScreen(viewModel, PaddingValues(0.dp),
+                    onVideoClick = { activeVideo = it; isPlayerExpanded = true },
+                    onChannelClick = { currentScreen = Screen.Channel(it) },
+                    onNotificationsClick = { currentScreen = Screen.Releases })
+            }
         }
+
+        // Player overlay
+        if (activeVideo != null) {
+            PlayerScreen(activeVideo!!.videoId, activeVideo!!.title, viewModel, repository,
+                isMini = !isPlayerExpanded,
+                bottomNavHeight = if (showBottomNav) 72.dp else 0.dp,
+                onBack = { isPlayerExpanded = false },
+                onExpand = { isPlayerExpanded = true },
+                onClose = { activeVideo = null; isPlayerExpanded = false },
+                onChannelClick = { currentScreen = Screen.Channel(it); isPlayerExpanded = false },
+                onRelatedVideoClick = { activeVideo = it; isPlayerExpanded = true })
+        }
+
+        // Login dialog overlay
+        if (showLogin) {
+            LoginScreen(repository,
+                onLoginSuccess = { viewModel.checkLoginState(); viewModel.setShowLogin(false); currentScreen = Screen.Home; currentTab = 0 },
+                onSkip = { viewModel.setShowLogin(false) })
+        }
+
+        // Create bottom sheet
+        if (showCreateSheet) {
+            CreateScreen(onDismiss = { showCreateSheet = false }, onUploadVideo = { }, onCreatePost = { }, onImportVideo = { })
+        }
+
+        // Welcome dialog
+        if (showWelcome) {
+            WelcomeDialog(onDismiss = { showWelcome = false; prefs.edit().putBoolean("first_launch", false).apply() })
+        }
+
+        // Bottom Navigation
+        AnimatedVisibility(
+            visible = showBottomNav,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF0F0F0F))) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TubeNavItem(Icons.Filled.Home, Icons.Outlined.Home, "Home",
+                        selected = currentTab == 0 && currentScreen == Screen.Home) {
+                        currentTab = 0; currentScreen = Screen.Home
+                    }
+                    TubeNavItem(Icons.Filled.SmartDisplay, Icons.Outlined.SmartDisplay, "Shorts",
+                        selected = currentTab == 1 && currentScreen == Screen.Shorts) {
+                        currentTab = 1; currentScreen = Screen.Shorts
+                    }
+                    TubeNavCreateItem { showCreateSheet = true }
+                    TubeNavItem(Icons.Filled.Notifications, Icons.Outlined.Notifications, "Notifications",
+                        selected = currentTab == 3 && currentScreen == Screen.Notifications) {
+                        currentTab = 3; currentScreen = Screen.Notifications
+                    }
+                    TubeNavItem(Icons.Filled.Person, Icons.Outlined.Person, "Profile",
+                        selected = currentTab == 4 && currentScreen == Screen.Profile) {
+                        currentTab = 4; currentScreen = Screen.Profile
+                    }
+                }
+                // Bottom safe area spacer
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TubeNavItem(
+    filledIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    outlinedIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp)
+            .padding(top = 4.dp, bottom = 2.dp)
+    ) {
+        Icon(
+            imageVector = if (selected) filledIcon else outlinedIcon,
+            contentDescription = label,
+            tint = if (selected) Color.White else Color(0xFF888888),
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            color = if (selected) Color.White else Color(0xFF888888),
+            fontSize = 10.sp,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun TubeNavCreateItem(onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp)
+            .padding(top = 4.dp, bottom = 2.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.AddCircle,
+            contentDescription = "Create",
+            tint = Color.White,
+            modifier = Modifier.size(28.dp)
+        )
     }
 }
 
@@ -459,4 +344,9 @@ sealed class Screen {
     object Releases : Screen()
     object History : Screen()
     object Settings : Screen()
+    object Notifications : Screen()
+    object Profile : Screen()
+    object About : Screen()
+    data class SubSettings(val settingId: String) : Screen()
+    object Login : Screen()
 }
